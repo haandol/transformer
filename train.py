@@ -147,10 +147,10 @@ def train_model(config: dict):
             )  # (batch_size, 1, 1, seq_len)
             decoder_mask = batch["decoder_mask"].to(device)  # (batch_size, 1, seq_len)
 
-            encoder_output = model.encoder(
+            encoder_output = model.encode(
                 encoder_input, encoder_mask
             )  # (batch_size, seq_len, d_model)
-            decoder_output = model.decoder(
+            decoder_output = model.decode(
                 encoder_output, encoder_mask, decoder_input, decoder_mask
             )  # (batch_size, seq_len, d_model)
             proj_output = model.proj(

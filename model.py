@@ -3,6 +3,85 @@ import torch
 import torch.nn as nn
 
 
+class LayerNormalization(nn.Module):
+    """
+    Layer normalization module.
+
+    Args:
+        eps (float): A small value added to the denominator for numerical stability. Default is 1e-6.
+
+    Attributes:
+        eps (float): A small value added to the denominator for numerical stability.
+        alpha (nn.Parameter): Learnable parameter for scaling.
+        bias (nn.Parameter): Learnable parameter for bias.
+
+    Methods:
+        forward(x: torch.Tensor) -> torch.Tensor:
+            Forward pass of the layer normalization module.
+    """
+
+    def __init__(self, features: int, eps: float = 1e-6) -> None:
+        """
+        Initialize the LayerNormalization module.
+
+        Args:
+            eps (float): A small value added to the denominator for numerical stability. Default is 1e-6.
+        """
+        super().__init__()
+        self.eps = eps
+        self.alpha = nn.Parameter(torch.ones(features))
+        self.bias = nn.Parameter(torch.zeros(features))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of the layer normalization module.
+
+        Args:
+            x (torch.Tensor): Input tensor, (batch, seq_len, hidden_size)
+
+        Returns:
+            torch.Tensor: Normalized tensor.
+        """
+        mean = x.mean(dim=-1, keepdim=True)
+        std = x.std(dim=-1, keepdim=True)
+        return self.alpha * (x - mean) / (std + self.eps) + self.bias
+
+
+class FeedForwardBlock(nn.Module):
+    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
+        """
+        Feed-forward block module of the Transformer model.
+
+        Args:
+            d_model (int): The input and output dimension of the block.
+            d_ff (int): The dimension of the intermediate layer.
+            dropout (float): The dropout probability.
+
+        """
+        super().__init__()
+        self.linear1 = nn.Linear(d_model, d_ff)  # W1 and B1
+        self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(d_ff, d_model)  # W2 and B2
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass of the feed-forward block.
+
+        Args:
+            x (torch.Tensor): The input tensor of shape (batch, seq_len, d_model).
+
+        Returns:
+            torch.Tensor: The output tensor of shape (batch, seq_len, d_model).
+
+        """
+        # (batch, seq_len, d_model) -> (batch, seq_len, d_ff) --> (batch, seq_len, d_model)
+        x = self.linear2(x)
+        x = self.dropout(x)
+        x = torch.relu(x)
+        x = self.linear1(x)
+        return x
+
+
 class InputEmbeddings(nn.Module):
     def __init__(self, d_model: int, vocab_size: int) -> None:
         """
@@ -82,83 +161,41 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 
-class LayerNormalization(nn.Module):
+class ResidualConnection(nn.Module):
     """
-    Layer normalization module.
+    A residual connection module that applies residual connection to the input tensor.
 
     Args:
-        eps (float): A small value added to the denominator for numerical stability. Default is 1e-6.
+        dropout (float): The dropout probability.
 
     Attributes:
-        eps (float): A small value added to the denominator for numerical stability.
-        alpha (nn.Parameter): Learnable parameter for scaling.
-        bias (nn.Parameter): Learnable parameter for bias.
+        dropout (nn.Dropout): The dropout layer.
+        norm (LayerNormalization): The layer normalization module.
 
     Methods:
-        forward(x: torch.Tensor) -> torch.Tensor:
-            Forward pass of the layer normalization module.
+        forward(x, sublayer): Applies the residual connection to the input tensor.
+
     """
 
-    def __init__(self, features: int, eps: float = 1e-6) -> None:
-        """
-        Initialize the LayerNormalization module.
-
-        Args:
-            eps (float): A small value added to the denominator for numerical stability. Default is 1e-6.
-        """
+    def __init__(self, features: int, dropout: float) -> None:
         super().__init__()
-        self.eps = eps
-        self.alpha = nn.Parameter(torch.ones(features))
-        self.bias = nn.Parameter(torch.zeros(features))
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass of the layer normalization module.
-
-        Args:
-            x (torch.Tensor): Input tensor, (batch, seq_len, hidden_size)
-
-        Returns:
-            torch.Tensor: Normalized tensor.
-        """
-        mean = x.mean(dim=-1, keepdim=True)
-        std = x.std(dim=-1, keepdim=True)
-        return self.alpha * (x - mean) / (std + self.eps) + self.bias
-
-
-class FeedForwardBlock(nn.Module):
-    def __init__(self, d_model: int, d_ff: int, dropout: float) -> None:
-        """
-        Feed-forward block module of the Transformer model.
-
-        Args:
-            d_model (int): The input and output dimension of the block.
-            d_ff (int): The dimension of the intermediate layer.
-            dropout (float): The dropout probability.
-
-        """
-        super().__init__()
-        self.linear1 = nn.Linear(d_model, d_ff)  # W1 and B1
         self.dropout = nn.Dropout(dropout)
-        self.linear2 = nn.Linear(d_ff, d_model)  # W2 and B2
+        self.norm = LayerNormalization(features)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x: torch.Tensor, sublayer: nn.Module) -> torch.Tensor:
         """
-        Forward pass of the feed-forward block.
+        Applies the residual connection to the input tensor.
 
         Args:
-            x (torch.Tensor): The input tensor of shape (batch, seq_len, d_model).
+            x (torch.Tensor): The input tensor.
+            sublayer (nn.Module): The sublayer module.
 
         Returns:
-            torch.Tensor: The output tensor of shape (batch, seq_len, d_model).
+            torch.Tensor: The output tensor after applying the residual connection.
 
         """
-        # (batch, seq_len, d_model) -> (batch, seq_len, d_ff) --> (batch, seq_len, d_model)
-        x = self.linear1(x)
-        x = self.dropout(x)
-        x = torch.relu(x)
-        x = self.linear2(x)
-        return x
+        # paper says add and then normalize, but the most common implementation is to normalize and then add
+        return x + self.dropout(sublayer(self.norm(x)))
 
 
 class MultiHeadAttentionBlock(nn.Module):
@@ -193,11 +230,10 @@ class MultiHeadAttentionBlock(nn.Module):
         assert d_model % h == 0, "d_model must be divisible by h"
 
         self.d_k = d_model // h
-        self.w_q = nn.Linear(d_model, d_model)  # Wq
-        self.w_k = nn.Linear(d_model, d_model)  # Wk
-        self.w_v = nn.Linear(d_model, d_model)  # Wv
-
-        self.w_o = nn.Linear(d_model, d_model)  # Wo
+        self.w_q = nn.Linear(d_model, d_model, bias=False)  # Wq
+        self.w_k = nn.Linear(d_model, d_model, bias=False)  # Wk
+        self.w_v = nn.Linear(d_model, d_model, bias=False)  # Wv
+        self.w_o = nn.Linear(d_model, d_model, bias=False)  # Wo
         self.dropout = nn.Dropout(dropout)
 
     @staticmethod
@@ -228,7 +264,7 @@ class MultiHeadAttentionBlock(nn.Module):
         # (batch, h, seq_len, d_k) @ (batch, h, d_k, seq_len) --> (batch, h, seq_len, seq_len)
         attention_scores = (query @ key.transpose(-2, -1)) / math.sqrt(d_k)
         if mask is not None:
-            attention_scores = attention_scores.masked_fill(mask == 0, -1e9)
+            attention_scores.masked_fill_(mask == 0, -1e9)
         # (batch, h, seq_len, seq_len)
         attention_scores = torch.softmax(attention_scores, dim=-1)
         if dropout is not None:
@@ -274,43 +310,6 @@ class MultiHeadAttentionBlock(nn.Module):
 
         # (batch, seq_len, d_model) --> (batch, seq_len, d_model)
         return self.w_o(x)
-
-
-class ResidualConnection(nn.Module):
-    """
-    A residual connection module that applies residual connection to the input tensor.
-
-    Args:
-        dropout (float): The dropout probability.
-
-    Attributes:
-        dropout (nn.Dropout): The dropout layer.
-        norm (LayerNormalization): The layer normalization module.
-
-    Methods:
-        forward(x, sublayer): Applies the residual connection to the input tensor.
-
-    """
-
-    def __init__(self, features: int, dropout: float) -> None:
-        super().__init__()
-        self.dropout = nn.Dropout(dropout)
-        self.norm = LayerNormalization(features)
-
-    def forward(self, x: torch.Tensor, sublayer: nn.Module) -> torch.Tensor:
-        """
-        Applies the residual connection to the input tensor.
-
-        Args:
-            x (torch.Tensor): The input tensor.
-            sublayer (nn.Module): The sublayer module.
-
-        Returns:
-            torch.Tensor: The output tensor after applying the residual connection.
-
-        """
-        # paper says add and then normalize, but the most common implementation is to normalize and then add
-        return x + self.dropout(sublayer(self.norm(x)))
 
 
 class EncoderBlock(nn.Module):
@@ -506,7 +505,7 @@ class ProjectionLayer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         # (batch, seq_len, d_model) --> (batch, seq_len, vocab_size)
-        return torch.log_softmax(self.proj(x), dim=-1)
+        return self.proj(x)
 
 
 class Transformer(nn.Module):
@@ -541,8 +540,8 @@ class Transformer(nn.Module):
             torch.Tensor: The encoded source sequence.
 
         """
-        src = self.src_pos
         src = self.src_embed(src)
+        src = self.src_pos(src)
         return self.encoder(src, src_mask)
 
     def decode(
@@ -565,8 +564,8 @@ class Transformer(nn.Module):
             torch.Tensor: The decoded target sequence.
 
         """
-        tgt = self.tgt_pos(tgt)
         tgt = self.tgt_embed(tgt)
+        tgt = self.tgt_pos(tgt)
         return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
 
     def projection(self, x: torch.Tensor) -> torch.Tensor:
