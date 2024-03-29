@@ -56,8 +56,7 @@ class PositionalEncoding(nn.Module):
         # Create a vector of shape (seq_len, 1)
         position = torch.arange(0, seq_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(
-            torch.arange(0, d_model, 2).float()
-            * (-torch.log(torch.tensor(10000.0)) / d_model)
+            torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
         )
         # apply the sin to even positions
         pe[:, 0::2] = torch.sin(position * div_term)
@@ -100,7 +99,7 @@ class LayerNormalization(nn.Module):
             Forward pass of the layer normalization module.
     """
 
-    def __init__(self, eps: float = 1e-6) -> None:
+    def __init__(self, features: int, eps: float = 1e-6) -> None:
         """
         Initialize the LayerNormalization module.
 
@@ -109,15 +108,15 @@ class LayerNormalization(nn.Module):
         """
         super().__init__()
         self.eps = eps
-        self.alpha = nn.Parameter(torch.ones(1))
-        self.bias = nn.Parameter(torch.zeros(1))
+        self.alpha = nn.Parameter(torch.ones(features))
+        self.bias = nn.Parameter(torch.zeros(features))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass of the layer normalization module.
 
         Args:
-            x (torch.Tensor): Input tensor.
+            x (torch.Tensor): Input tensor, (batch, seq_len, hidden_size)
 
         Returns:
             torch.Tensor: Normalized tensor.
@@ -140,8 +139,8 @@ class FeedForwardBlock(nn.Module):
         """
         super().__init__()
         self.linear1 = nn.Linear(d_model, d_ff)  # W1 and B1
-        self.linear2 = nn.Linear(d_ff, d_model)  # W2 and B2
         self.dropout = nn.Dropout(dropout)
+        self.linear2 = nn.Linear(d_ff, d_model)  # W2 and B2
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -156,8 +155,8 @@ class FeedForwardBlock(nn.Module):
         """
         # (batch, seq_len, d_model) -> (batch, seq_len, d_ff) --> (batch, seq_len, d_model)
         x = self.linear1(x)
-        x = torch.relu(x)
         x = self.dropout(x)
+        x = torch.relu(x)
         x = self.linear2(x)
         return x
 
@@ -293,10 +292,10 @@ class ResidualConnection(nn.Module):
 
     """
 
-    def __init__(self, dropout: float) -> None:
+    def __init__(self, features: int, dropout: float) -> None:
         super().__init__()
         self.dropout = nn.Dropout(dropout)
-        self.norm = LayerNormalization()
+        self.norm = LayerNormalization(features)
 
     def forward(self, x: torch.Tensor, sublayer: nn.Module) -> torch.Tensor:
         """
@@ -334,13 +333,14 @@ class EncoderBlock(nn.Module):
         self,
         self_attention_block: MultiHeadAttentionBlock,
         feed_forward_blck: FeedForwardBlock,
+        features: int,
         dropout: float,
     ) -> None:
         super().__init__()
         self.self_attention_block = self_attention_block
         self.feed_forward_block = feed_forward_blck
         self.residual_connections = nn.ModuleList(
-            ResidualConnection(dropout) for _ in range(2)
+            ResidualConnection(features, dropout) for _ in range(2)
         )
 
     def forward(self, x: torch.Tensor, src_mask: torch.Tensor) -> torch.Tensor:
@@ -370,10 +370,10 @@ class Encoder(nn.Module):
         layers (nn.ModuleList): List of encoder layers.
     """
 
-    def __init__(self, layers: nn.ModuleList) -> None:
+    def __init__(self, features: int, layers: nn.ModuleList) -> None:
         super().__init__()
         self.layers = layers
-        self.norm = LayerNormalization()
+        self.norm = LayerNormalization(features)
 
     def forward(self, x: torch.Tensor, mask: torch.Tensor) -> torch.Tensor:
         """
@@ -417,6 +417,7 @@ class DecoderBlock(nn.Module):
         self_attention_block: MultiHeadAttentionBlock,
         cross_attention_block: MultiHeadAttentionBlock,
         feed_forward_block: FeedForwardBlock,
+        features: int,
         dropout: float,
     ) -> None:
         super().__init__()
@@ -424,7 +425,7 @@ class DecoderBlock(nn.Module):
         self.cross_attention_block = cross_attention_block
         self.feed_forward_block = feed_forward_block
         self.residual_connections = nn.ModuleList(
-            ResidualConnection(dropout) for _ in range(3)
+            ResidualConnection(features, dropout) for _ in range(3)
         )
 
     def forward(
@@ -461,7 +462,7 @@ class DecoderBlock(nn.Module):
 
 
 class Decoder(nn.Module):
-    def __init__(self, layers: nn.ModuleList) -> None:
+    def __init__(self, features: int, layers: nn.ModuleList) -> None:
         """
         Initializes a Decoder module.
 
@@ -471,7 +472,7 @@ class Decoder(nn.Module):
         """
         super().__init__()
         self.layers = layers
-        self.norm = LayerNormalization()
+        self.norm = LayerNormalization(features)
 
     def forward(
         self,
@@ -606,7 +607,7 @@ def build_transformer(
         encoder_self_attention_block = MultiHeadAttentionBlock(d_model, h, dropout)
         feed_forward_block = FeedForwardBlock(d_model, d_ff, dropout)
         encoder_block = EncoderBlock(
-            encoder_self_attention_block, feed_forward_block, dropout
+            encoder_self_attention_block, feed_forward_block, d_model, dropout
         )
         encoder_blocks.append(encoder_block)
 
@@ -619,13 +620,14 @@ def build_transformer(
             decoder_self_attention_block,
             decoder_cross_attention_block,
             feed_forward_block,
+            d_model,
             dropout,
         )
         decoder_blocks.append(decoder_block)
 
     # create encoder and decoder
-    encoder = Encoder(nn.ModuleList(encoder_blocks))
-    decoder = Decoder(nn.ModuleList(decoder_blocks))
+    encoder = Encoder(d_model, nn.ModuleList(encoder_blocks))
+    decoder = Decoder(d_model, nn.ModuleList(decoder_blocks))
 
     # create projection layer
     projection_layer = ProjectionLayer(d_model, tgt_vocab_size)
