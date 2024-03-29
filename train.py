@@ -168,7 +168,7 @@ def train_model(config: dict):
             decoder_output = model.decode(
                 encoder_output, encoder_mask, decoder_input, decoder_mask
             )  # (batch_size, seq_len, d_model)
-            proj_output = model.project(
+            proj_output = model.projection(
                 decoder_output
             )  # (batch_size, seq_len, tgt_vocab_size)
 

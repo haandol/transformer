@@ -75,7 +75,7 @@ class FeedForwardBlock(nn.Module):
 
         """
         # (batch, seq_len, d_model) -> (batch, seq_len, d_ff) --> (batch, seq_len, d_model)
-        return self.linear_2(self.dropout(torch.relu(self.linear_1(x))))
+        return self.linear2(self.dropout(torch.relu(self.linear1(x))))
 
 
 class InputEmbeddings(nn.Module):
