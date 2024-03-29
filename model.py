@@ -298,7 +298,7 @@ class MultiHeadAttentionBlock(nn.Module):
             1, 2
         )
 
-        x = self.attention_scores = MultiHeadAttentionBlock.attention(
+        x, self.attention_scores = MultiHeadAttentionBlock.attention(
             query, key, value, mask, self.dropout
         )
         # (batch, h, seq_len, d_k) --> (batch, seq_len, h, d_k) --> (batch, seq_len, d_model)
