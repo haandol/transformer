@@ -2,6 +2,7 @@ import os
 import warnings
 from pathlib import Path
 
+import wandb
 import torch
 import torchmetrics
 import torch.nn as nn
@@ -13,7 +14,6 @@ from tokenizers import Tokenizer
 from tokenizers.models import WordLevel
 from tokenizers.trainers import WordLevelTrainer
 from tokenizers.pre_tokenizers import Whitespace
-from torch.utils.tensorboard import SummaryWriter
 
 from dataset import BilingualDataset, causal_mask
 from model import build_transformer
@@ -51,7 +51,7 @@ def greedy_decode(model, source, source_mask, tokenizer_src, tokenizer_tgt, max_
     return decoder_input.squeeze(0)
 
 
-def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device, print_msg, global_step, writer, num_examples=2):
+def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, device, print_msg, global_step, num_examples=2):
     model.eval()
     count = 0
 
@@ -97,25 +97,21 @@ def run_validation(model, validation_ds, tokenizer_src, tokenizer_tgt, max_len, 
                 print_msg('-'*console_width)
                 break
     
-    if writer:
-        # Evaluate the character error rate
-        # Compute the char error rate 
-        metric = torchmetrics.CharErrorRate()
-        cer = metric(predicted, expected)
-        writer.add_scalar('validation cer', cer, global_step)
-        writer.flush()
+     # Evaluate the character error rate
+    # Compute the char error rate 
+    metric = torchmetrics.CharErrorRate()
+    cer = metric(predicted, expected)
+    wandb.log({'validation/cer': cer, 'global_step': global_step})
 
-        # Compute the word error rate
-        metric = torchmetrics.WordErrorRate()
-        wer = metric(predicted, expected)
-        writer.add_scalar('validation wer', wer, global_step)
-        writer.flush()
+    # Compute the word error rate
+    metric = torchmetrics.WordErrorRate()
+    wer = metric(predicted, expected)
+    wandb.log({'validation/wer': wer, 'global_step': global_step})
 
-        # Compute the BLEU metric
-        metric = torchmetrics.BLEUScore()
-        bleu = metric(predicted, expected)
-        writer.add_scalar('validation BLEU', bleu, global_step)
-        writer.flush()
+    # Compute the BLEU metric
+    metric = torchmetrics.BLEUScore()
+    bleu = metric(predicted, expected)
+    wandb.log({'validation/BLEU': bleu, 'global_step': global_step})
 
 
 def get_all_sentences(ds: Dataset, lang: str):
@@ -225,8 +221,6 @@ def train_model(config: dict):
         config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()
     ).to(device)
 
-    writer = SummaryWriter(config["experiment_name"])
-
     optimizer = torch.optim.Adam(model.parameters(), lr=config["lr"], eps=1e-9)
 
     initial_epoch = 0
@@ -250,6 +244,12 @@ def train_model(config: dict):
         ignore_index=tokenizer_src.token_to_id("[PAD]"), label_smoothing=0.1
     ).to(device)
 
+    # define our custom x axis metric
+    wandb.define_metric("global_step")
+    # define which metrics will be plotted against it
+    wandb.define_metric("validation/*", step_metric="global_step")
+    wandb.define_metric("train/*", step_metric="global_step")
+
     for epoch in range(initial_epoch, config["num_epochs"]):
         torch.cuda.empty_cache()
         model.train()
@@ -268,7 +268,7 @@ def train_model(config: dict):
             decoder_output = model.decode(
                 encoder_output, encoder_mask, decoder_input, decoder_mask
             )  # (batch_size, seq_len, d_model)
-            proj_output = model.projection(
+            proj_output = model.project(
                 decoder_output
             )  # (batch_size, seq_len, tgt_vocab_size)
 
@@ -280,9 +280,7 @@ def train_model(config: dict):
             )
             batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
 
-            # log loss
-            writer.add_scalar("train/loss", loss.item(), global_step)
-            writer.flush()
+            wandb.log({'train/loss': loss.item(), 'global_step': global_step})
 
             # backpropagation
             loss.backward()
@@ -294,7 +292,7 @@ def train_model(config: dict):
             global_step += 1
 
         # validation
-        run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device, lambda msg: batch_iterator.write(msg), global_step, writer)
+        run_validation(model, val_dataloader, tokenizer_src, tokenizer_tgt, config['seq_len'], device, lambda msg: batch_iterator.write(msg), global_step)
 
         # save model
         model_filename = get_weights_file_path(config, f"{epoch:02d}")
@@ -312,4 +310,12 @@ def train_model(config: dict):
 if __name__ == "__main__":
     warnings.filterwarnings("ignore")
     config = get_config()
+    config['num_epochs'] = 30
+    config['preload'] = None
+
+    wandb.init(
+        project="pytorch-transformer",
+        config=config
+    )
+
     train_model(config)

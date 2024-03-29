@@ -566,7 +566,7 @@ class Transformer(nn.Module):
         tgt = self.tgt_pos(tgt)
         return self.decoder(tgt, encoder_output, src_mask, tgt_mask)
 
-    def projection(self, x: torch.Tensor) -> torch.Tensor:
+    def project(self, x: torch.Tensor) -> torch.Tensor:
         """
         Projects the output tensor to the vocabulary size.
 
