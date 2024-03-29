@@ -59,7 +59,8 @@ class BilingualDataset(Dataset):
                 torch.tensor(
                     self.pad_token.repeat(enc_num_padding_tokens), dtype=torch.int64
                 ),
-            ]
+            ],
+            dim=0,
         )
 
         # add SOS to the decoder input
@@ -70,7 +71,8 @@ class BilingualDataset(Dataset):
                 torch.tensor(
                     self.pad_token.repeat(dec_num_padding_tokens), dtype=torch.int64
                 ),
-            ]
+            ],
+            dim=0,
         )
 
         # add EOS to the end of sentence. this is what we expect as output from the decoder
@@ -81,7 +83,8 @@ class BilingualDataset(Dataset):
                 torch.tensor(
                     self.pad_token.repeat(dec_num_padding_tokens), dtype=torch.int64
                 ),
-            ]
+            ],
+            dim=0,
         )
         assert encoder_input.shape[0] == self.seq_len
         assert decoder_input.shape[0] == self.seq_len
@@ -94,10 +97,7 @@ class BilingualDataset(Dataset):
             .unsqueeze(0)
             .unsqueeze(0)
             .int(),  # (1, 1, seq_len)
-            "decoder_mask": (decoder_input != self.pad_token)
-            .unsqueeze(0)
-            .unsqueeze(0)
-            .int()
+            "decoder_mask": (decoder_input != self.pad_token).unsqueeze(0).int()
             & causal_mask(
                 decoder_input.size(0)
             ),  # (1, seq_len) & (1, seq_len, seq_len)

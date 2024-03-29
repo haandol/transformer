@@ -540,6 +540,7 @@ class Transformer(nn.Module):
             torch.Tensor: The encoded source sequence.
 
         """
+        # (batch, seq_len, d_model)
         src = self.src_embed(src)
         src = self.src_pos(src)
         return self.encoder(src, src_mask)
@@ -564,6 +565,7 @@ class Transformer(nn.Module):
             torch.Tensor: The decoded target sequence.
 
         """
+        # (batch, seq_len, d_model)
         tgt = self.tgt_embed(tgt)
         tgt = self.tgt_pos(tgt)
         return self.decoder(tgt, encoder_output, src_mask, tgt_mask)

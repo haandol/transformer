@@ -15,17 +15,17 @@ from torch.utils.tensorboard import SummaryWriter
 
 from dataset import BilingualDataset
 from model import build_transformer
-from config import get_weights_file_path, get_config
+from config import latest_weights_file_path, get_weights_file_path, get_config
 
 
-def get_all_sentences(ds, lang):
+def get_all_sentences(ds: Dataset, lang: str):
     for item in ds:
         yield item["translation"][lang]
 
 
 def get_or_build_tokenizer(config: dict, ds: Dataset, lang: str):
     tokenizer_path = Path(config["tokenizer_file"].format(lang))
-    if not tokenizer_path.exists():
+    if not Path.exists(tokenizer_path):
         tokenizer = Tokenizer(WordLevel(unk_token="[UNK]"))
         tokenizer.pre_tokenizer = Whitespace()
         trainer = WordLevelTrainer(
@@ -40,7 +40,9 @@ def get_or_build_tokenizer(config: dict, ds: Dataset, lang: str):
 
 def get_ds(config: dict):
     ds_raw = load_dataset(
-        "opus_books", f"{config['lang_src']}-{config['lang_tgt']}", split="train"
+        config["datasource"],
+        f"{config['lang_src']}-{config['lang_tgt']}",
+        split="train",
     )
 
     # build tokenizers
@@ -101,22 +103,27 @@ def get_model(config: dict, vocab_src_len: int, vocab_tgt_len: int):
         vocab_tgt_len,
         config["seq_len"],
         config["seq_len"],
-        config["d_model"],
+        d_model=config["d_model"],
     )
     return model
 
 
 def train_model(config: dict):
     # define device
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = (
+        "cuda"
+        if torch.cuda.is_available()
+        else "mps" if torch.has_mps or torch.backends.mps.is_available() else "cpu"
+    )
     print(f"using device: {device}")
+    device = torch.device(device)
 
     Path(config["model_folder"]).mkdir(parents=True, exist_ok=True)
 
     train_dataloader, val_dataloader, tokenizer_src, tokenizer_tgt = get_ds(config)
     model = get_model(
         config, tokenizer_src.get_vocab_size(), tokenizer_tgt.get_vocab_size()
-    )
+    ).to(device)
 
     writer = SummaryWriter(config["experiment_name"])
 
@@ -124,21 +131,29 @@ def train_model(config: dict):
 
     initial_epoch = 0
     global_step = 0
-    if config["preload"]:
-        model_filename = get_weights_file_path(config, config["preload"])
+    preload = config["preload"]
+    model_filename = (
+        latest_weights_file_path(config)
+        if preload
+        else get_weights_file_path(config, config["preload"]) if preload else None
+    )
+    if model_filename:
         print(f"preloading model from {model_filename}")
         state = torch.load(model_filename)
         initial_epoch = state["epoch"] + 1
         optimizer.load_state_dict(state["optimizer_state_dict"])
         global_step = state["global_step"]
+    else:
+        print("no model preloaded")
 
     loss_fn = nn.CrossEntropyLoss(
         ignore_index=tokenizer_src.token_to_id("[PAD]"), label_smoothing=0.1
     ).to(device)
 
     for epoch in range(initial_epoch, config["num_epochs"]):
+        torch.cuda.empty_cache()
         model.train()
-        batch_iterator = tqdm(train_dataloader, desc=f"Processing epoch: {epoch}")
+        batch_iterator = tqdm(train_dataloader, desc=f"Processing epoch: {epoch:02}")
         for batch in batch_iterator:
             encoder_input = batch["encoder_input"].to(device)  # (batch_size, seq_len)
             decoder_input = batch["decoder_input"].to(device)  # (batch_size, seq_len)
@@ -153,7 +168,7 @@ def train_model(config: dict):
             decoder_output = model.decode(
                 encoder_output, encoder_mask, decoder_input, decoder_mask
             )  # (batch_size, seq_len, d_model)
-            proj_output = model.proj(
+            proj_output = model.project(
                 decoder_output
             )  # (batch_size, seq_len, tgt_vocab_size)
 
@@ -165,15 +180,21 @@ def train_model(config: dict):
             )
             batch_iterator.set_postfix({"loss": f"{loss.item():6.3f}"})
 
+            # log loss
             writer.add_scalar("train/loss", loss.item(), global_step)
             writer.flush()
 
+            # backpropagation
             loss.backward()
 
+            # update weights
             optimizer.step()
-            optimizer.zero_grad()
+            optimizer.zero_grad(set_to_none=True)
 
             global_step += 1
+
+        # validation
+        # TODO: implement validation
 
         # save model
         model_filename = get_weights_file_path(config, f"{epoch:02d}")
@@ -190,6 +211,5 @@ def train_model(config: dict):
 
 if __name__ == "__main__":
     warnings.filterwarnings("ignore")
-
     config = get_config()
     train_model(config)
