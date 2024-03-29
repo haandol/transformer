@@ -75,11 +75,7 @@ class FeedForwardBlock(nn.Module):
 
         """
         # (batch, seq_len, d_model) -> (batch, seq_len, d_ff) --> (batch, seq_len, d_model)
-        x = self.linear2(x)
-        x = self.dropout(x)
-        x = torch.relu(x)
-        x = self.linear1(x)
-        return x
+        return self.linear_2(self.dropout(torch.relu(self.linear_1(x))))
 
 
 class InputEmbeddings(nn.Module):
@@ -157,7 +153,7 @@ class PositionalEncoding(nn.Module):
         Returns:
             torch.Tensor: The output tensor of shape (batch_size, seq_len, d_model) after applying positional encoding.
         """
-        x = x + (self.pe[:, x.shape[1], :]).requires_grad_(False)
+        x = x + (self.pe[:, : x.shape[1], :]).requires_grad_(False)
         return self.dropout(x)
 
 
